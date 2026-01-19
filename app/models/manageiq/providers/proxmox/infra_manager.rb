@@ -7,6 +7,7 @@ module ManageIQ::Providers
     supports :refresh_new_target
     supports :refresh_ems
 
+
     def self.ems_type
       @ems_type ||= "proxmox".freeze
     end
