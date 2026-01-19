@@ -19,6 +19,10 @@ module ManageIQ::Providers::Proxmox::InfraManager::Vm::Reconfigure
     4.terabyte / 1.megabyte
   end
 
+  def validate_config_spec(_options = {})
+    {}
+  end
+
   def build_config_spec(task_options)
     task_options.deep_stringify_keys!
     
@@ -42,16 +46,16 @@ module ManageIQ::Providers::Proxmox::InfraManager::Vm::Reconfigure
     spec['onboot'] = task_options['onboot'] ? 1 : 0 if task_options.key?('onboot')
     spec['boot'] = task_options['boot_order'] if task_options['boot_order']
     
-
     spec['protection'] = task_options['protection'] ? 1 : 0 if task_options.key?('protection')
 
     spec['disksAdd'] = spec_for_added_disks(task_options['disk_add']) if task_options['disk_add']
     spec['disksResize'] = spec_for_disks_resize(task_options['disk_resize']) if task_options['disk_resize']
+    spec['disksEdit'] = spec_for_disks_resize(task_options['disk_resize']) if task_options['disk_resize']  # Alias
     spec['disksRemove'] = task_options['disk_remove'] if task_options['disk_remove']
     
-
     spec['networkAdapters'] = spec_for_network_adapters(task_options) if has_network_changes?(task_options)
     
+    _log.info("Built config spec: #{spec.inspect}")
     spec
   end
 
@@ -67,51 +71,45 @@ module ManageIQ::Providers::Proxmox::InfraManager::Vm::Reconfigure
   end
 
   def spec_for_disks_resize(disks)
-    disks.collect do |disk|
+    _log.info("spec_for_disks_resize called with: #{disks.inspect}")
+    
+    disks.collect do |d|
+      filename = d['disk_name']
+      disk = find_disk_by_filename(filename)
+
+      raise MiqException::MiqVmError, "No disk with filename [#{filename}] was found" unless disk
+      raise MiqException::MiqVmError, 'New disk size must be larger than the current one' unless disk_size_valid?(disk.size, d['disk_size_in_mb'])
+
       {
-        'disk_name' => disk['disk_name'],
-        'disk_size_in_mb' => disk['disk_size_in_mb'].to_i
+        'disk_name' => d['disk_name'],
+        'disk_size_in_mb' => d['disk_size_in_mb'].to_i
       }
     end
   end
 
-  def spec_for_network_adapters(options)
-    spec = {}
-    spec['add'] = network_adapters_add(options['network_adapter_add']) if options['network_adapter_add']
-    spec['edit'] = network_adapters_edit(options['network_adapter_edit']) if options['network_adapter_edit']
-    spec['remove'] = network_adapters_remove(options['network_adapter_remove']) if options['network_adapter_remove']
-    spec
+  def find_disk_by_filename(filename)
+    hardware.disks.find_by(:filename => filename)
   end
 
-  def network_adapters_add(adapters)
-    adapters.collect do |adapter|
-      {
-        'network' => adapter['network'],
-        'model' => adapter['adapter_type'] || 'virtio',
-        'bridge' => adapter['network']
-      }
-    end
+  def disk_size_valid?(current_size, new_size_str)
+    new_size = Integer(new_size_str)
+    new_size.megabytes >= current_size
+  rescue
+    false
   end
 
-  def network_adapters_edit(adapters)
-    adapters.collect do |adapter|
-      {
-        'name' => adapter['name'],
-        'network' => adapter['network'],
-        'bridge' => adapter['network']
-      }
-    end
+  def has_network_changes?(task_options)
+    task_options['network_adapter_add'].present? ||
+      task_options['network_adapter_edit'].present? ||
+      task_options['network_adapter_remove'].present?
   end
 
-  def network_adapters_remove(adapters)
-    adapters.collect do |adapter|
-      {
-        'name' => adapter['network']['name']
-      }
-    end
+  def spec_for_network_adapters(task_options)
+    # À implémenter plus tard
+    {}
   end
 
-  def has_network_changes?(options)
-    options['network_adapter_add'] || options['network_adapter_edit'] || options['network_adapter_remove']
+  def raw_reconfigure(spec)
+    ext_management_system.vm_reconfigure(self, :spec => spec)
   end
 end
